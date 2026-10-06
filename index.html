@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NXKAAV Cube Jump</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; font-family: 'Segoe UI', sans-serif; user-select: none; }
+  #game { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; color: #fff; text-align: center;
+    background: rgba(10, 10, 26, 0.85); backdrop-filter: blur(8px); padding: 20px;
+  }
+  #overlay.hidden { display: none; }
+  h1 { font-size: 32px; margin-bottom: 8px; background: linear-gradient(135deg, #00d4ff, #ff00ea); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  p { font-size: 14px; color: #aaa; margin-bottom: 24px; }
+  button {
+    padding: 14px 40px; font-size: 16px; font-weight: bold; color: #fff; cursor: pointer;
+    background: linear-gradient(135deg, #00d4ff, #ff00ea); border: none;
+    border-radius: 50px; box-shadow: 0 8px 24px rgba(0, 212, 255, 0.4);
+    transition: transform 0.15s;
+  }
+  button:active { transform: scale(0.95); }
+  #score { position: absolute; top: 20px; left: 20px; font-size: 28px; font-weight: bold; color: #fff; z-index: 10; text-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+  #best { position: absolute; top: 24px; right: 20px; font-size: 14px; color: #aaa; z-index: 10; }
+  #score b { color: #00d4ff; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="score">Score: <b id="scoreVal">0</b></div>
+<div id="best">Best: <span id="bestVal">0</span></div>
+<div id="overlay">
+  <h1>NXKAAV Cube Jump</h1>
+  <p>Tap untuk lompat · Hindari spike · Kumpulkan skor!</p>
+  <button id="startBtn">TAP UNTUK MULAI</button>
+</div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const scoreVal = document.getElementById('scoreVal');
+  const bestVal = document.getElementById('bestVal');
+
+  let W, H, DPR;
+  function resize() {
+    DPR = window.devicePixelRatio || 1;
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+
+  const GROUND_Y_RATIO = 0.78;
+  const GRAVITY = 0.9;
+  const JUMP_V = -16;
+  const BASE_SPEED = 5;
+  const SPEED_INC = 0.0015;
+
+  let state = 'idle';
+  let score, best = parseInt(localStorage.getItem('nxkaav_best') || '0', 10);
+  let speed, cube, obstacles, particles, tick, groundY;
+
+  bestVal.textContent = best;
+
+  function reset() {
+    resize();
+    groundY = H * GROUND_Y_RATIO;
+    score = 0;
+    tick = 0;
+    speed = BASE_SPEED;
+    cube = { x: W * 0.18, y: groundY - 40, w: 40, h: 40, vy: 0, onGround: true, rot: 0 };
+    obstacles = [];
+    particles = [];
+    scoreVal.textContent = 0;
+  }
+
+  function spawnObstacle() {
+    const type = Math.random() < 0.7 ? 'spike' : 'block';
+    if (type === 'spike') {
+      obstacles.push({
+        type: 'spike',
+        x: W + 20,
+        y: groundY - 34,
+        w: 34, h: 34,
+        passed: false
+      });
+    } else {
+      const h = 30 + Math.random() * 40;
+      obstacles.push({
+        type: 'block',
+        x: W + 20,
+        y: groundY - h,
+        w: 34, h: h,
+        passed: false
+      });
+    }
+  }
+
+  function rectHit(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function jump() {
+    if (state !== 'playing') return;
+    if (cube.onGround) {
+      cube.vy = JUMP_V;
+      cube.onGround = false;
+      // particles
+      for (let i = 0; i < 6; i++) {
+        particles.push({
+          x: cube.x + cube.w/2, y: cube.y + cube.h,
+          vx: (Math.random() - 0.5) * 4, vy: Math.random() * 3,
+          life: 20, maxLife: 20
+        });
+      }
+    }
+  }
+
+  function update() {
+    if (state !== 'playing') return;
+    tick++;
+    speed = BASE_SPEED + tick * SPEED_INC;
+
+    // physics cube
+    cube.vy += GRAVITY;
+    cube.y += cube.vy;
+    if (cube.y + cube.h >= groundY) {
+      cube.y = groundY - cube.h;
+      cube.vy = 0;
+      cube.onGround = true;
+      cube.rot = 0;
+    } else {
+      cube.onGround = false;
+      cube.rot += 0.15;
+    }
+
+    // obstacle spawn
+    if (tick % Math.max(40, Math.floor(90 - tick * 0.05)) === 0) {
+      spawnObstacle();
+    }
+
+    // move obstacles
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const o = obstacles[i];
+      o.x -= speed;
+
+      // collision
+      if (rectHit(cube, o)) {
+        state = 'dead';
+        if (score > best) {
+          best = score;
+          localStorage.setItem('nxkaav_best', best);
+          bestVal.textContent = best;
+        }
+        setTimeout(() => {
+          overlay.classList.remove('hidden');
+          overlay.querySelector('h1').textContent = 'Game Over';
+          overlay.querySelector('p').innerHTML = 'Skor kamu: <b>' + score + '</b><br>Best: <b>' + best + '</b>';
+          startBtn.textContent = 'MAIN LAGI';
+        }, 300);
+        return;
+      }
+
+      // scoring
+      if (!o.passed && o.x + o.w < cube.x) {
+        o.passed = true;
+        score++;
+        scoreVal.textContent = score;
+      }
+
+      // remove
+      if (o.x + o.w < -50) obstacles.splice(i, 1);
+    }
+
+    // particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy;
+      p.life--;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  function draw() {
+    // bg gradient
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0a0a1a');
+    g.addColorStop(1, '#1a0a2e');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // stars
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    for (let i = 0; i < 50; i++) {
+      const x = (i * 137 + tick * 0.3) % W;
+      const y = (i * 89) % (groundY - 40);
+      ctx.fillRect(x, y, 2, 2);
+    }
+
+    // ground
+    ctx.fillStyle = '#0f0f2a';
+    ctx.fillRect(0, groundY, W, H - groundY);
+    // neon line
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = '#00d4ff';
+    ctx.beginPath();
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(W, groundY);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // moving ground lines
+    ctx.strokeStyle = 'rgba(0, 212, 255, 0.3)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 20; i++) {
+      const x = (i * 80 - (tick * speed) % 80);
+      ctx.beginPath();
+      ctx.moveTo(x, groundY + 10);
+      ctx.lineTo(x + 40, groundY + 10);
+      ctx.stroke();
+    }
+
+    // obstacles
+    for (const o of obstacles) {
+      if (o.type === 'spike') {
+        ctx.fillStyle = '#ff00ea';
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#ff00ea';
+        ctx.beginPath();
+        ctx.moveTo(o.x + o.w/2, o.y);
+        ctx.lineTo(o.x + o.w, o.y + o.h);
+        ctx.lineTo(o.x, o.y + o.h);
+        ctx.closePath();
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      } else {
+        ctx.fillStyle = '#ff00ea';
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#ff00ea';
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    // cube
+    ctx.save();
+    ctx.translate(cube.x + cube.w/2, cube.y + cube.h/2);
+    ctx.rotate(cube.rot);
+    ctx.fillStyle = '#00d4ff';
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = '#00d4ff';
+    ctx.fillRect(-cube.w/2, -cube.h/2, cube.w, cube.h);
+    ctx.shadowBlur = 0;
+    // inner detail
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(-cube.w/2 + 8, -cube.h/2 + 8, 8, 8);
+    ctx.fillRect(cube.w/2 - 16, -cube.h/2 + 8, 8, 8);
+    ctx.fillRect(-cube.w/2 + 8, cube.h/2 - 16, 8, 8);
+    ctx.fillRect(cube.w/2 - 16, cube.h/2 - 16, 8, 8);
+    ctx.restore();
+
+    // particles
+    for (const p of particles) {
+      const a = p.life / p.maxLife;
+      ctx.fillStyle = 'rgba(0, 212, 255, ' + a + ')';
+      ctx.fillRect(p.x, p.y, 4, 4);
+    }
+  }
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function start() {
+    reset();
+    overlay.classList.add('hidden');
+    state = 'playing';
+  }
+
+  startBtn.addEventListener('click', start);
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (state === 'playing') jump();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      if (state === 'idle' || state === 'dead') start();
+      else jump();
+    }
+  });
+
+  // handle Telegram WebApp
+  if (window.Telegram && window.Telegram.WebApp) {
+    window.Telegram.WebApp.ready();
+    window.Telegram.WebApp.expand();
+    window.Telegram.WebApp.setHeaderColor('#0a0a1a');
+  }
+
+  resize();
+  reset();
+  loop();
+})();
+</script>
+</body>
+</html>
